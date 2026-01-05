@@ -1,4 +1,4 @@
-# MicroPython on Raspberry Pi Pico W **BLE Mesh (NimBLE) Conceptual Lab**
+# MicroPython on Raspberry Pi Pico W **BLE Mesh (NimBLE)**
 
 ## Important Note on MicroPython BLE Mesh
 
