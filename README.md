@@ -395,6 +395,12 @@ Inside `_IRQ_SCAN_RESULT`, after parsing the frame:
 
 ---
 
+## 3E — Remove `forward_raw()` as its not needed anymore
+
+That’s Part 2 code. It won’t break anything, but for a “final Part 3”, remove it to avoid accidentally calling it.
+
+---
+
 ## What students should observe
 
 After Part 3:
