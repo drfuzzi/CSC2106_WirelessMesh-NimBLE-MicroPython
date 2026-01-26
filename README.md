@@ -233,6 +233,7 @@ Expected behaviour:
 
 * `INJECT:` appears roughly every 60–70 seconds (because of jitter)
 * `RX:` appears when another node is injecting nearby
+* Message can appear twice as BLE broadcast can transmit multiple times even though you 'inject' once.
 
 ---
 
@@ -262,7 +263,7 @@ In `_IRQ_SCAN_RESULT`, after printing RX, add:
             self.forward_raw(s)
 ```
 
-What students learn:
+Expected behaviour:
 
 * One injected message can create repeated transmissions due to forwarding
 * With 2 nodes, the packet can ping-pong indefinitely
@@ -412,10 +413,3 @@ After Part 3:
 
 This is why **every real mesh or routing protocol** includes both mechanisms.
 
-
-## Notes for your 300 ms “advertise once per injection” requirement
-
-* `advertise_burst_start(..., 300ms)` means: transmit for ~300 ms, then stop.
-* It is not “one RF packet”, but it prevents the “same message advertised forever” effect.
-
-If you want, I can provide a short “expected console output” section for each part (Part 1 / 2 / 3) so students can self-check quickly.
