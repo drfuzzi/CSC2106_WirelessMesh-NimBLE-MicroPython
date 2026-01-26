@@ -276,6 +276,8 @@ This happened because forwarding nodes had **no memory** and **no hop limit**.
 
 In Part 3, we add the **minimum control mechanisms** required for any flooding-based mesh-like protocol. Add two essential controls used in real mesh and routing protocols:
 
+Goal:
+
 1. **De-duplication**
    Remember which messages have already been processed using a cache keyed by
    `(ORIG, MSGID)`.
