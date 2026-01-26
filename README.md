@@ -1,241 +1,349 @@
-# MicroPython on Raspberry Pi Pico W **BLE Mesh (NimBLE)**
+## BLE Advertisement Flooding “Mesh-like” Demo (MicroPython Pico W)
 
-## Important Note on MicroPython BLE Mesh
+### Important note
 
-The **MicroPython core build for the Pico W** currently exposes standard BLE **advertising and GATT services (Bluetooth Central/Peripheral)**, but it **does not include the full, native NimBLE Mesh networking stack** (which handles routing, provisioning, and self-healing) required for a true mesh network like the one in the original lab. Implementing a full mesh requires advanced custom C firmware development.
+MicroPython on Pico W supports BLE **advertising + scanning**, but it **does not provide a full BLE Mesh stack** (routing/provisioning/self-healing). 
+This lab builds a **mesh-like flooding relay** using advertisements.
 
-Therefore, this lab focuses on setting up a **Bi-Directional Peer-to-Peer BLE Communication** that acts as the building block for mesh networking.
+---
 
-## I. Objective and Prerequisites
+## Message format (frame)
 
-### Objective
+We encode a small text frame inside the BLE “device name”:
 
-To set up two Pico W devices to communicate wirelessly using basic Bluetooth Low Energy (BLE) services, demonstrating the foundational data exchange necessary for any mesh-like IoT topology.
-
-### Prerequisites
-
-  * **Hardware**: Two Raspberry Pi Pico W boards.
-  * **Software**: Thonny IDE.
-  * **Environment**: Custom firmware or installation of necessary BLE libraries may be required for advanced mesh features beyond this basic peer-to-peer exchange.
-
-## II. Peer-to-Peer BLE Setup (MicroPython)
-
-We will configure one Pico W as a **BLE Peripheral (Advertiser)** to host data (Sensor Data) and the second Pico W as a **BLE Central (Scanner)** to connect and read that data.
-
-### A. Pico W 1: The Peripheral (Sensor Node)
-
-The Peripheral is like a Mesh Node advertising its sensor reading.
-
-| File | Role | Code Summary |
-| :--- | :--- | :--- |
-| `peripheral.py` | Hosts the data service and advertises its presence. | Sets up a temperature characteristic (`UUID(0x2A6E)`), starts advertising, and updates the temperature value periodically. |
-
-```python
-# peripheral.py (Pico W 1 - Sender)
-import bluetooth
-import random
-import time
-import machine
-
-# Define BLE UUIDs (using standard 16-bit UUIDs for temperature)
-_IRQ_CENTRAL_CONNECT = const(1)
-_IRQ_CENTRAL_DISCONNECT = const(2)
-_TEMP_UUID = bluetooth.UUID(0x2A6E)
-_ENV_SERVICE_UUID = bluetooth.UUID(0x181A) # Environmental Sensing Service
-
-# Temperature characteristic setup: (UUID, Flags, Descriptors)
-_TEMP_CHAR = (_TEMP_UUID, bluetooth.FLAG_READ | bluetooth.FLAG_NOTIFY)
-
-# Service definition: (UUID, (Characteristic, ...))
-_ENV_SERVICE = (_ENV_SERVICE_UUID, (_TEMP_CHAR,),)
-
-class BLEPeripheral:
-    def __init__(self, name):
-        self._ble = bluetooth.BLE()
-        self._ble.active(True)
-        self._ble.irq(self._irq)
-        ((self._handle,),) = self._ble.gatts_register_services((_ENV_SERVICE,))
-        self._connections = set()
-        self._advertise()
-        print(f"Peripheral '{name}' started.")
-
-    def _irq(self, event, data):
-        if event == _IRQ_CENTRAL_CONNECT:
-            conn_handle, _, _ = data
-            self._connections.add(conn_handle)
-            print("Central connected.")
-        elif event == _IRQ_CENTRAL_DISCONNECT:
-            conn_handle, _, _ = data
-            self._connections.remove(conn_handle)
-            self._advertise()
-            print("Central disconnected. Advertising again.")
-
-    def _advertise(self):
-        # Advertising payload: Name and Service UUIDs
-        self._ble.gap_advertise(100000, adv_data=bytearray(f"\x02\x01\x06\x03\x03\x1A\x18\x08\t{self._ble.config('mac')[0]}"))
-
-    def update_temperature(self, temp_c):
-        temp_bytes = str(temp_c).encode('utf-8')
-        # Update the characteristic value
-        self._ble.gatts_write(self._handle, temp_bytes)
-        
-        # Notify all connected Centrals
-        for conn_handle in self._connections:
-            self._ble.gatts_notify(conn_handle, self._handle)
-
-# --- Main Logic ---
-ble_peripheral = BLEPeripheral("PicoW_Sensor_A")
-temp_sensor = machine.ADC(4)
-conversion_factor = 3.3 / (65535)
-
-def read_temperature():
-    voltage = temp_sensor.read_u16() * conversion_factor
-    temp = 27 - (voltage - 0.706) / 0.001721
-    return temp
-
-while True:
-    current_temp = read_temperature()
-    ble_peripheral.update_temperature(current_temp)
-    print(f"Updating temperature: {current_temp:.2f} C. Connected clients: {len(ble_peripheral._connections)}")
-    time.sleep(2)
+```
+M1|ORIG|MSGID|TTL|TYPE|DATA
 ```
 
-### B. Pico W 2: The Central (Receiver Node)
+* `ORIG`: original sender ID (we use `machine.unique_id()` as a stable per-board identifier)
+* `MSGID`: unique per message (created by the origin)
+* `TTL`: hop limit (used in Part 3)
+* `TYPE`: e.g., `T` for temperature
+* `DATA`: payload
 
-The Central simulates a Mesh Node connecting to and reading data from its neighbor.
+---
 
-| File | Role | Code Summary |
-| :--- | :--- | :--- |
-| `central.py` | Scans for the Peripheral, connects to it, reads the characteristic value, and prints the data. | Searches for the Peripheral's advertised name, connects, discovers services, finds the temperature characteristic, and reads the value. |
+# Starter template (students copy this first)
+
+Create `mesh_node.py` with the template below. Then add snippets in Part 1 → Part 2 → Part 3.
 
 ```python
-# central.py (Pico W 2 - Receiver/Scanner)
+# mesh_node.py (TEMPLATE)
 import bluetooth
 import time
 import ubinascii
+import machine
+import urandom
 from micropython import const
 
-# Define BLE UUIDs (Must match Peripheral)
+# --------- BLE IRQ EVENTS ----------
 _IRQ_SCAN_RESULT = const(5)
-_IRQ_SCAN_DONE = const(6)
-_IRQ_GATTC_SERVICE_RESULT = const(9)
-_IRQ_GATTC_SERVICE_DONE = const(10)
-_IRQ_GATTC_CHARACTERISTIC_RESULT = const(11)
-_IRQ_GATTC_CHARACTERISTIC_DONE = const(12)
-_IRQ_GATTC_READ_DONE = const(15)
-_IRQ_GATTC_NOTIFY = const(18)
-_TEMP_UUID = bluetooth.UUID(0x2A6E)
-_ENV_SERVICE_UUID = bluetooth.UUID(0x181A)
+_IRQ_SCAN_DONE   = const(6)
 
-TARGET_NAME = "PicoW_Sensor_A"
+# --------- CONFIG ----------
+ADV_INTERVAL_US = 300_000      # 300 ms advertising interval
+SCAN_MS         = 10_000       # scan window (restart continuously)
 
-class BLECentral:
+INJECT_PERIOD_S = 60           # originate new data once per minute
+INJECT_JITTER_S = 10           # 0..10s jitter (prevents everyone injecting together)
+
+DEFAULT_TTL     = 3            # used only in Part 3
+SEEN_MAX        = 400          # used only in Part 3
+
+# Stable per-board ID (acts like "MAC-like ID" for this lab)
+NODE_ID = ubinascii.hexlify(machine.unique_id()).decode()[-6:]  # e.g. a1b2c3
+
+# Pico internal temperature sensor (ADC4)
+temp_adc = machine.ADC(4)
+conv = 3.3 / 65535
+
+def read_temp_c():
+    v = temp_adc.read_u16() * conv
+    return 27 - (v - 0.706) / 0.001721
+
+def make_frame(orig, msgid, ttl, typ, data):
+    return "M1|{}|{}|{}|{}|{}".format(orig, msgid, ttl, typ, data)
+
+def parse_frame(s):
+    try:
+        if not s.startswith("M1|"):
+            return None
+        parts = s.split("|", 5)
+        if len(parts) != 6:
+            return None
+        _, orig, msgid, ttl_s, typ, data = parts
+        ttl = int(ttl_s)
+        return orig, msgid, ttl, typ, data
+    except:
+        return None
+
+def adv_payload_name(name_str):
+    name = name_str.encode()
+    payload = bytearray(b"\x02\x01\x06")                 # Flags
+    payload += bytearray((len(name) + 1, 0x09)) + name   # Complete Local Name
+    return payload
+
+def frame_to_name(frame):
+    # keep short so it fits in advertising data reliably
+    return frame[:25]
+
+class Node:
     def __init__(self):
-        self._ble = bluetooth.BLE()
-        self._ble.active(True)
-        self._ble.irq(self._irq)
-        self._reset()
+        self.ble = bluetooth.BLE()
+        self.ble.active(True)
+        self.ble.irq(self._irq)
 
-    def _reset(self):
-        self._addr_type = None
-        self._addr = None
-        self._conn_handle = None
-        self._temp_handle = None
+        # Part 3 uses this for de-duplication
+        self.seen = []  # list of "orig:msgid"
 
+        # Injection schedule (60s + jitter)
+        self.next_inject_ms = time.ticks_add(
+            time.ticks_ms(),
+            (INJECT_PERIOD_S + self._rand_jitter_s()) * 1000
+        )
+
+        self.scan()
+
+        print("Node ID:", NODE_ID)
+
+    def _rand_jitter_s(self):
+        return urandom.getrandbits(8) % (INJECT_JITTER_S + 1)
+
+    def advertise_frame(self, frame):
+        name = frame_to_name(frame)
+        payload = adv_payload_name(name)
+        self.ble.gap_advertise(ADV_INTERVAL_US, adv_data=payload)
+
+    def scan(self):
+        self.ble.gap_scan(SCAN_MS, 30000, 30000)
+
+    # ----------------------------
+    # PART-SPECIFIC FUNCTIONS GO HERE
+    # ----------------------------
+
+    def _irq(self, event, data):
+        # PART-SPECIFIC IRQ HANDLING GOES HERE
+        if event == _IRQ_SCAN_DONE:
+            self.scan()
+
+    def run(self):
+        # PART-SPECIFIC MAIN LOOP GOES HERE
+        while True:
+            time.sleep_ms(50)
+
+node = Node()
+node.run()
+```
+
+---
+
+# Part 1 — Send new data and listen (no forwarding)
+
+### Goal
+
+* Each node **injects** its own temperature **once per minute** (with jitter)
+* Each node **listens** and prints received frames
+* No rebroadcast yet
+
+### Step 1A: Add `inject_own()` inside the class
+
+Insert this under the “PART-SPECIFIC FUNCTIONS GO HERE” comment.
+
+```python
+    def inject_own(self):
+        temp = read_temp_c()
+        data = "{:.2f}".format(temp)
+
+        msgid = str(time.ticks_ms() & 0xFFFFFFFF)
+        frame = make_frame(NODE_ID, msgid, 0, "T", data)  # ttl not used yet
+        self.advertise_frame(frame)
+        print("INJECT:", frame)
+
+        # schedule next inject: 60s + jitter
+        self.next_inject_ms = time.ticks_add(
+            time.ticks_ms(),
+            (INJECT_PERIOD_S + self._rand_jitter_s()) * 1000
+        )
+```
+
+### Step 1B: Add scan receive + print into `_irq`
+
+Replace the `_irq` in the template with this:
+
+```python
     def _irq(self, event, data):
         if event == _IRQ_SCAN_RESULT:
             addr_type, addr, adv_type, rssi, adv_data = data
-            if TARGET_NAME.encode() in adv_data:
-                self._addr_type = addr_type
-                self._addr = addr
-                self._ble.gap_scan(None) # Stop scan
-                print(f"Found target: {TARGET_NAME}")
+
+            # Extract frame by searching for "M1|" inside adv payload
+            try:
+                raw = bytes(adv_data)
+                idx = raw.find(b"M1|")
+                if idx == -1:
+                    return
+                s = raw[idx:].decode("utf-8", "ignore").split("\x00")[0]
+            except:
+                return
+
+            parsed = parse_frame(s)
+            if not parsed:
+                return
+
+            orig, msgid, ttl, typ, payload = parsed
+            print("RX (rssi={}): orig={} type={} data={}".format(rssi, orig, typ, payload))
 
         elif event == _IRQ_SCAN_DONE:
-            if self._addr:
-                print("Scan done. Connecting...")
-                self._ble.gattc_connect(self._addr_type, self._addr)
-            else:
-                print("Scan done. Target not found.")
-                self._ble.gap_scan(10000) # Scan again
-
-        elif event == _IRQ_GATTC_SERVICE_RESULT:
-            conn_handle, start_handle, end_handle, uuid = data
-            if conn_handle == self._conn_handle and uuid == _ENV_SERVICE_UUID:
-                self._start_handle = start_handle
-                self._end_handle = end_handle
-                print("Service found.")
-
-        elif event == _IRQ_GATTC_SERVICE_DONE:
-            if self._start_handle and self._end_handle:
-                self._ble.gattc_discover_characteristics(
-                    self._conn_handle, self._start_handle, self._end_handle
-                )
-
-        elif event == _IRQ_GATTC_CHARACTERISTIC_RESULT:
-            conn_handle, start_handle, end_handle, uuid, properties = data
-            if conn_handle == self._conn_handle and uuid == _TEMP_UUID:
-                self._temp_handle = start_handle
-                print("Temperature characteristic found.")
-
-        elif event == _IRQ_GATTC_CHARACTERISTIC_DONE:
-            if self._temp_handle:
-                print("Discovery complete.")
-            else:
-                print("Characteristic not found.")
-                self._ble.gattc_disconnect(self._conn_handle)
-
-        elif event == _IRQ_GATTC_READ_DONE:
-            conn_handle, value_handle, value = data
-            if value_handle == self._temp_handle:
-                temp = value.decode('utf-8')
-                print(f"Received Temperature: {temp} C")
-
-        elif event == _IRQ_GATTC_NOTIFY:
-            conn_handle, value_handle, value = data
-            if value_handle == self._temp_handle:
-                temp = value.decode('utf-8')
-                print(f"Notification Received: {temp} C")
-
-        elif event == _IRQ_CENTRAL_CONNECT:
-            conn_handle, addr_type, addr = data
-            self._conn_handle = conn_handle
-            self._ble.gattc_discover_services(self._conn_handle)
-            print("Connected to Peripheral.")
-
-        elif event == _IRQ_CENTRAL_DISCONNECT:
-            print("Peripheral disconnected. Starting scan again.")
-            self._reset()
             self.scan()
-
-
-    def scan(self):
-        self._ble.gap_scan(10000) # Scan for 10 seconds
-
-    def read_temp(self):
-        if self._conn_handle and self._temp_handle:
-            self._ble.gattc_read(self._conn_handle, self._temp_handle)
-            return True
-        return False
-
-# --- Main Logic ---
-ble_central = BLECentral()
-ble_central.scan()
-
-while True:
-    if ble_central.read_temp():
-        time.sleep(5)
-    else:
-        time.sleep(1)
 ```
 
-## III. Lab Assignment
+### Step 1C: Add injection timer into `run()`
 
-### Basic BLE Peer-to-Peer Communication
+Replace `run()` in the template with:
 
-  * **Task 1: Setup the Advertiser (Peripheral)**:
-      * Upload and run `peripheral.py` on Pico W 1. Observe the terminal output to confirm it is advertising.
-  * **Task 2: Setup the Scanner (Central)**:
-      * Upload and run `central.py` on Pico W 2. Observe the terminal output. It should report finding, connecting to, and successfully receiving the temperature reading from Pico W 1.
-  * **Task 3: Implement Actuator Control**:
-      * Modify `peripheral.py` to toggle its LED (Pin **`"LED"`**) every time the temperature data is requested/read by the Central device. This confirms the connection and data exchange is active.
+```python
+    def run(self):
+        while True:
+            now = time.ticks_ms()
+            if time.ticks_diff(now, self.next_inject_ms) >= 0:
+                self.inject_own()
+            time.sleep_ms(50)
+```
+
+At this stage: students see messages, but they do **not** travel multi-hop.
+
+---
+
+# Part 2 — Forward received data (ignore duplicates and TTL)
+
+### Goal
+
+* Make multi-hop propagation obvious fast
+* Intentionally “wrong”: no duplicate suppression, no TTL
+
+### Step 2A: Add a `forward_raw()` function
+
+Insert this under Part-specific functions:
+
+```python
+    def forward_raw(self, raw_frame_str):
+        # Minimal forwarding (no TTL, no dedupe)
+        # Add a tiny delay to reduce immediate collisions
+        time.sleep_ms(10 + (time.ticks_ms() % 30))
+        self.advertise_frame(raw_frame_str)
+        print("FWD (raw):", raw_frame_str)
+```
+
+### Step 2B: In `_irq`, forward everything you receive
+
+In the `_IRQ_SCAN_RESULT` handler (Part 1B), after printing RX, add:
+
+```python
+            # WARNING: this will cause a lot of repeats and loops
+            self.forward_raw(s)
+```
+
+Now messages can travel multi-hop, but you will see storms/loops. That is expected in Part 2.
+
+---
+
+# Part 3 — Remove duplicates and include TTL
+
+### Goal
+
+* Add loop control mechanisms used in real mesh routing designs:
+
+  * **De-duplication** (seen cache)
+  * **TTL** (hop limit)
+
+### Step 3A: Add dedupe helpers
+
+Insert these under part-specific functions:
+
+```python
+    def seen_check_add(self, key):
+        if key in self.seen:
+            return True
+        self.seen.append(key)
+        if len(self.seen) > SEEN_MAX:
+            del self.seen[0:len(self.seen) - SEEN_MAX]
+        return False
+```
+
+### Step 3B: Change injection to include TTL
+
+In `inject_own()`, change:
+
+```python
+        frame = make_frame(NODE_ID, msgid, 0, "T", data)
+```
+
+to:
+
+```python
+        frame = make_frame(NODE_ID, msgid, DEFAULT_TTL, "T", data)
+        self.seen_check_add("{}:{}".format(NODE_ID, msgid))  # don't forward our own bounced packet
+```
+
+### Step 3C: Replace raw forwarding with TTL forwarding
+
+Add this new forward function:
+
+```python
+    def forward_ttl(self, orig, msgid, ttl, typ, payload):
+        ttl2 = ttl - 1
+        if ttl2 < 0:
+            return
+        fwd = make_frame(orig, msgid, ttl2, typ, payload)
+
+        time.sleep_ms(10 + (time.ticks_ms() % 30))
+        self.advertise_frame(fwd)
+        print("FWD ttl={}: {}".format(ttl2, fwd))
+```
+
+### Step 3D: Update `_irq` to dedupe + TTL forward
+
+In `_IRQ_SCAN_RESULT`, after parsing:
+
+1. Create dedupe key:
+
+```python
+            key = "{}:{}".format(orig, msgid)
+            if self.seen_check_add(key):
+                return
+```
+
+2. Print RX as “new”:
+
+```python
+            print("RX NEW (rssi={}): orig={} ttl={} type={} data={}".format(
+                rssi, orig, ttl, typ, payload
+            ))
+```
+
+3. Forward only if TTL allows:
+
+```python
+            if ttl > 0:
+                self.forward_ttl(orig, msgid, ttl, typ, payload)
+```
+
+Now the behaviour is mesh-*like* flooding with basic loop control.
+
+---
+
+## What you should see in the console
+
+* `INJECT:` once per minute per node (with jitter)
+* `RX` / `RX NEW:` showing messages from other `orig=...`
+* `FWD` showing that intermediate nodes are relaying data across the classroom
+* When TTL is reduced, long-distance propagation becomes rarer
+
+---
+
+## Notes for a large class size
+
+* Part 2 will get noisy quickly (intentionally).
+* Part 3 is the “usable” version for the full class.
+* Keep `DEFAULT_TTL` low (2–3) for stability.
+
+---
