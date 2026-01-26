@@ -269,62 +269,105 @@ What students learn:
 
 ---
 
-# Part 3 — Remove duplicates and include TTL
+# Part 3 — Loop Control: Remove Duplicates and Bound Propagation
 
-Goal:
+In Part 2, packets were forwarded indefinitely, even with only two nodes.
+This happened because forwarding nodes had **no memory** and **no hop limit**.
 
-* Add two essential controls found in real mesh-like designs:
+In Part 3, we add the **minimum control mechanisms** required for any flooding-based mesh-like protocol. Add two essential controls used in real mesh and routing protocols:
 
-  1. **De-duplication** (`(ORIG, MSGID)` cache)
-  2. **TTL** (hop limit, decremented on forward)
+1. **De-duplication**
+   Remember which messages have already been processed using a cache keyed by
+   `(ORIG, MSGID)`.
 
-### 3A) Add dedupe helper
+2. **TTL (Time-To-Live)**
+   Limit how far a message can propagate by decrementing a hop counter on each forward.
 
-Insert in the class:
+Together, these ensure that **every message eventually stops**.
+
+---
+
+## 3A — Add a de-duplication helper
+
+Each message is uniquely identified by:
+
+```
+(ORIG, MSGID)
+```
+
+If a node sees the same pair again, the message must be dropped.
+
+Insert the following helper inside the `Node` class:
 
 ```python
     def seen_check_add(self, key):
         if key in self.seen:
-            return True
+            return True      # already seen → drop
         self.seen.append(key)
         if len(self.seen) > SEEN_MAX:
             del self.seen[0:len(self.seen) - SEEN_MAX]
-        return False
+        return False         # first time seen
 ```
 
-### 3B) Update injection to include TTL and mark self as seen
+This gives the node a **short-term memory**.
 
-Change Part 1 `inject_own()`:
+---
 
-* Replace TTL=0 with TTL=DEFAULT_TTL
-* Add seen marking
+## 3B — Update injection: include TTL and mark own packet as seen
+
+When a node **injects** a new message, it must immediately remember it.
+
+Otherwise, when the node later hears its own message (via self-scan or a bounce from another node), it would appear “new” and be forwarded again.
+
+Modify `inject_own()` as follows:
+
+1. Use `DEFAULT_TTL` instead of `0`
+2. Add the injected message to the `seen` cache
 
 ```python
         frame = make_frame(NODE_ID, msgid, DEFAULT_TTL, "T", data)
+
+        # IMPORTANT: mark injected packet as already seen
         self.seen_check_add("{}:{}".format(NODE_ID, msgid))
+
         self.advertise_burst_start(frame)
         print("INJECT:", frame)
 ```
 
-### 3C) Replace raw forwarding with TTL forwarding
+This step is critical.
+Without it, nodes will forward their **own** packets.
 
-Add:
+---
+
+## 3C — Replace raw forwarding with TTL-based forwarding
+
+Forwarded messages must:
+
+* decrement the TTL
+* stop propagating when TTL reaches zero
+
+Add the following function inside the class:
 
 ```python
     def forward_ttl(self, orig, msgid, ttl, typ, payload):
         ttl2 = ttl - 1
         if ttl2 < 0:
-            return
+            return            # message dies here
+
         fwd = make_frame(orig, msgid, ttl2, typ, payload)
         self.advertise_burst_start(fwd)
         print("FWD ttl={}: {}".format(ttl2, fwd))
 ```
 
-### 3D) Update `_irq()` to dedupe + TTL forward
+This ensures messages have a **finite lifetime**.
 
-In `_IRQ_SCAN_RESULT`, after parsing:
+---
 
-1. Deduplicate:
+## 3D — Update `_irq()` to apply de-duplication and TTL forwarding
+
+Inside `_IRQ_SCAN_RESULT`, after parsing the frame:
+
+### 1. De-duplicate using `(ORIG, MSGID)`
 
 ```python
             key = "{}:{}".format(orig, msgid)
@@ -332,7 +375,7 @@ In `_IRQ_SCAN_RESULT`, after parsing:
                 return
 ```
 
-2. Print as NEW:
+### 2. Deliver the message locally
 
 ```python
             print("RX NEW (rssi={}): orig={} ttl={} type={} data={}".format(
@@ -340,19 +383,33 @@ In `_IRQ_SCAN_RESULT`, after parsing:
             ))
 ```
 
-3. Forward only if TTL allows:
+### 3. Forward only if TTL allows
 
 ```python
             if ttl > 0:
                 self.forward_ttl(orig, msgid, ttl, typ, payload)
 ```
 
-What students learn:
+---
 
-* Dedupe stops infinite repeats
-* TTL bounds propagation range (lower TTL → less reach)
+## What students should observe
+
+After Part 3:
+
+* Each message appears **once** per node
+* Messages propagate a limited distance
+* No infinite ping-pong, even with only two nodes
+* Reducing `DEFAULT_TTL` visibly reduces how far messages travel
 
 ---
+
+## Key takeaway
+
+> Flooding without memory and hop limits loops forever.
+> Adding de-duplication and TTL is the minimum requirement for stability.
+
+This is why **every real mesh or routing protocol** includes both mechanisms.
+
 
 ## Notes for your 300 ms “advertise once per injection” requirement
 
