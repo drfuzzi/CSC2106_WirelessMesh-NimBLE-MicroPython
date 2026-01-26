@@ -442,3 +442,6 @@ After Part 3:
 
 This is why **every real mesh or routing protocol** includes both mechanisms.
 
+---
+
+[Assignment for this Lab Session](/Assignment.md)
