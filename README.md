@@ -1,34 +1,37 @@
-## BLE Advertisement Flooding “Mesh-like” Demo (MicroPython Pico W)
+## BLE Flooding “Mesh-like” Demo (MicroPython Pico W)
 
-### Important note
+This lab uses **BLE advertisements** (broadcast) + **scanning** (receive). It is **not Bluetooth SIG BLE Mesh**; we are building a **mesh-like flooding relay** at the application layer.
 
-MicroPython on Pico W supports BLE **advertising + scanning**, but it **does not provide a full BLE Mesh stack** (routing/provisioning/self-healing). 
-This lab builds a **mesh-like flooding relay** using advertisements.
+### Key terms (use these consistently)
+
+* **Inject**: originate a new message (new `MSGID`, `ORIG = me`)
+* **Advertise burst**: transmit that message for a short time window (here **300 ms**) then stop
+* **Forward**: advertise a message that originated from someone else
 
 ---
 
-## Message format (frame)
+## Frame format
 
-We encode a small text frame inside the BLE “device name”:
+We encode frames as short text (kept small to fit in advertising name field):
 
 ```
 M1|ORIG|MSGID|TTL|TYPE|DATA
 ```
 
-* `ORIG`: original sender ID (we use `machine.unique_id()` as a stable per-board identifier)
-* `MSGID`: unique per message (created by the origin)
-* `TTL`: hop limit (used in Part 3)
-* `TYPE`: e.g., `T` for temperature
-* `DATA`: payload
+Example:
+
+```
+M1|a1b2c3|12345678|3|T|26.73
+```
 
 ---
 
-# Starter template (students copy this first)
+# Starter template (copy first)
 
-Create `mesh_node.py` with the template below. Then add snippets in Part 1 → Part 2 → Part 3.
+Create `mesh_node.py` with this template. It does **not** print RX yet and does **not** inject yet until you add Part 1 snippets.
 
 ```python
-# mesh_node.py (TEMPLATE)
+# mesh_node.py (STARTER TEMPLATE)
 import bluetooth
 import time
 import ubinascii
@@ -41,17 +44,17 @@ _IRQ_SCAN_RESULT = const(5)
 _IRQ_SCAN_DONE   = const(6)
 
 # --------- CONFIG ----------
-ADV_INTERVAL_US = 300_000      # 300 ms advertising interval
-SCAN_MS         = 10_000       # scan window (restart continuously)
+ADV_INTERVAL_US = 200_000      # advertising interval while active (200 ms)
+ADV_BURST_MS    = 300          # advertise only 300 ms per injection/forward
+SCAN_MS         = 10_000       # scan window (auto-restart)
 
-INJECT_PERIOD_S = 60           # originate new data once per minute
-INJECT_JITTER_S = 10           # 0..10s jitter (prevents everyone injecting together)
+INJECT_PERIOD_S = 60           # inject once every minute
+INJECT_JITTER_S = 10           # add 0..10s jitter
 
 DEFAULT_TTL     = 3            # used only in Part 3
 SEEN_MAX        = 400          # used only in Part 3
 
-# Stable per-board ID (acts like "MAC-like ID" for this lab)
-NODE_ID = ubinascii.hexlify(machine.unique_id()).decode()[-6:]  # e.g. a1b2c3
+NODE_ID = ubinascii.hexlify(machine.unique_id()).decode()[-6:]  # stable per-board ID
 
 # Pico internal temperature sensor (ADC4)
 temp_adc = machine.ADC(4)
@@ -72,8 +75,7 @@ def parse_frame(s):
         if len(parts) != 6:
             return None
         _, orig, msgid, ttl_s, typ, data = parts
-        ttl = int(ttl_s)
-        return orig, msgid, ttl, typ, data
+        return orig, msgid, int(ttl_s), typ, data
     except:
         return None
 
@@ -84,7 +86,7 @@ def adv_payload_name(name_str):
     return payload
 
 def frame_to_name(frame):
-    # keep short so it fits in advertising data reliably
+    # Keep conservative so it fits reliably in advertising payload
     return frame[:25]
 
 class Node:
@@ -93,89 +95,110 @@ class Node:
         self.ble.active(True)
         self.ble.irq(self._irq)
 
-        # Part 3 uses this for de-duplication
+        # ---------- Adv burst state ----------
+        self._adv_active = False
+        self._adv_stop_ms = 0
+
+        # ---------- Part 3 dedupe ----------
         self.seen = []  # list of "orig:msgid"
 
-        # Injection schedule (60s + jitter)
+        # ---------- Injection schedule ----------
         self.next_inject_ms = time.ticks_add(
             time.ticks_ms(),
             (INJECT_PERIOD_S + self._rand_jitter_s()) * 1000
         )
 
         self.scan()
-
         print("Node ID:", NODE_ID)
 
     def _rand_jitter_s(self):
         return urandom.getrandbits(8) % (INJECT_JITTER_S + 1)
 
-    def advertise_frame(self, frame):
-        name = frame_to_name(frame)
-        payload = adv_payload_name(name)
+    # ========== ADVERTISE: "burst" transmit then stop ==========
+    def advertise_burst_start(self, frame, duration_ms=ADV_BURST_MS):
+        payload = adv_payload_name(frame_to_name(frame))
         self.ble.gap_advertise(ADV_INTERVAL_US, adv_data=payload)
+        self._adv_active = True
+        self._adv_stop_ms = time.ticks_add(time.ticks_ms(), duration_ms)
+
+    def advertise_burst_service(self):
+        # Call frequently to stop advertising after the burst window ends
+        if self._adv_active and time.ticks_diff(time.ticks_ms(), self._adv_stop_ms) >= 0:
+            self.ble.gap_advertise(None)  # stop advertising
+            self._adv_active = False
 
     def scan(self):
         self.ble.gap_scan(SCAN_MS, 30000, 30000)
 
     # ----------------------------
-    # PART-SPECIFIC FUNCTIONS GO HERE
+    # INSERT PART-SPECIFIC CODE BELOW
     # ----------------------------
 
     def _irq(self, event, data):
-        # PART-SPECIFIC IRQ HANDLING GOES HERE
+        # INSERT PART-SPECIFIC IRQ HANDLING HERE
         if event == _IRQ_SCAN_DONE:
             self.scan()
 
     def run(self):
-        # PART-SPECIFIC MAIN LOOP GOES HERE
         while True:
-            time.sleep_ms(50)
+            # Always service advertising burst stop
+            self.advertise_burst_service()
+
+            # INSERT PART-SPECIFIC LOOP LOGIC HERE
+
+            time.sleep_ms(20)
 
 node = Node()
 node.run()
 ```
 
+What students see with just the template:
+
+* Only: `Node ID: a1b2c3`
+* Nothing else (by design)
+
 ---
 
 # Part 1 — Send new data and listen (no forwarding)
 
-### Goal
+Goal:
 
-* Each node **injects** its own temperature **once per minute** (with jitter)
+* Each node **injects** a new temperature frame **once per minute** (+ jitter)
 * Each node **listens** and prints received frames
-* No rebroadcast yet
+* **No forwarding** of received frames
 
-### Step 1A: Add `inject_own()` inside the class
+### 1A) Add `inject_own()` inside the class
 
-Insert this under the “PART-SPECIFIC FUNCTIONS GO HERE” comment.
+Insert under “INSERT PART-SPECIFIC CODE BELOW”.
 
 ```python
     def inject_own(self):
         temp = read_temp_c()
         data = "{:.2f}".format(temp)
-
         msgid = str(time.ticks_ms() & 0xFFFFFFFF)
-        frame = make_frame(NODE_ID, msgid, 0, "T", data)  # ttl not used yet
-        self.advertise_frame(frame)
+
+        # TTL not used in Part 1; set 0 to make it clear there is no hop logic yet
+        frame = make_frame(NODE_ID, msgid, 0, "T", data)
+
+        # Advertise only once per injection = 300 ms burst
+        self.advertise_burst_start(frame)
         print("INJECT:", frame)
 
-        # schedule next inject: 60s + jitter
+        # Schedule next injection: 60s + jitter
         self.next_inject_ms = time.ticks_add(
             time.ticks_ms(),
             (INJECT_PERIOD_S + self._rand_jitter_s()) * 1000
         )
 ```
 
-### Step 1B: Add scan receive + print into `_irq`
+### 1B) Replace `_irq()` to print received frames
 
-Replace the `_irq` in the template with this:
+Replace the template `_irq()` with:
 
 ```python
     def _irq(self, event, data):
         if event == _IRQ_SCAN_RESULT:
             addr_type, addr, adv_type, rssi, adv_data = data
-
-            # Extract frame by searching for "M1|" inside adv payload
             try:
                 raw = bytes(adv_data)
                 idx = raw.find(b"M1|")
@@ -196,68 +219,68 @@ Replace the `_irq` in the template with this:
             self.scan()
 ```
 
-### Step 1C: Add injection timer into `run()`
+### 1C) Update `run()` to inject on schedule
 
-Replace `run()` in the template with:
+Inside the `run()` loop, under “INSERT PART-SPECIFIC LOOP LOGIC HERE”, insert:
 
 ```python
-    def run(self):
-        while True:
             now = time.ticks_ms()
             if time.ticks_diff(now, self.next_inject_ms) >= 0:
                 self.inject_own()
-            time.sleep_ms(50)
 ```
 
-At this stage: students see messages, but they do **not** travel multi-hop.
+Expected behaviour:
+
+* `INJECT:` appears roughly every 60–70 seconds (because of jitter)
+* `RX:` appears when another node is injecting nearby
 
 ---
 
 # Part 2 — Forward received data (ignore duplicates and TTL)
 
-### Goal
+Goal:
 
-* Make multi-hop propagation obvious fast
-* Intentionally “wrong”: no duplicate suppression, no TTL
+* Make multi-hop propagation obvious
+* Intentionally flawed: no dedupe, no TTL (expect “ping-pong” / storms)
 
-### Step 2A: Add a `forward_raw()` function
+### 2A) Add a simple forward function
 
-Insert this under Part-specific functions:
+Insert in the class:
 
 ```python
     def forward_raw(self, raw_frame_str):
-        # Minimal forwarding (no TTL, no dedupe)
-        # Add a tiny delay to reduce immediate collisions
-        time.sleep_ms(10 + (time.ticks_ms() % 30))
-        self.advertise_frame(raw_frame_str)
-        print("FWD (raw):", raw_frame_str)
+        # Forward exactly what we received (intentionally wrong for Part 2)
+        self.advertise_burst_start(raw_frame_str)
+        print("FWD:", raw_frame_str)
 ```
 
-### Step 2B: In `_irq`, forward everything you receive
+### 2B) Modify `_irq()` to forward all received frames
 
-In the `_IRQ_SCAN_RESULT` handler (Part 1B), after printing RX, add:
+In `_IRQ_SCAN_RESULT`, after printing RX, add:
 
 ```python
-            # WARNING: this will cause a lot of repeats and loops
             self.forward_raw(s)
 ```
 
-Now messages can travel multi-hop, but you will see storms/loops. That is expected in Part 2.
+What students learn:
+
+* One injected message can create repeated transmissions due to forwarding
+* With 2 nodes, the packet can ping-pong indefinitely
 
 ---
 
 # Part 3 — Remove duplicates and include TTL
 
-### Goal
+Goal:
 
-* Add loop control mechanisms used in real mesh routing designs:
+* Add two essential controls found in real mesh-like designs:
 
-  * **De-duplication** (seen cache)
-  * **TTL** (hop limit)
+  1. **De-duplication** (`(ORIG, MSGID)` cache)
+  2. **TTL** (hop limit, decremented on forward)
 
-### Step 3A: Add dedupe helpers
+### 3A) Add dedupe helper
 
-Insert these under part-specific functions:
+Insert in the class:
 
 ```python
     def seen_check_add(self, key):
@@ -269,24 +292,23 @@ Insert these under part-specific functions:
         return False
 ```
 
-### Step 3B: Change injection to include TTL
+### 3B) Update injection to include TTL and mark self as seen
 
-In `inject_own()`, change:
+Change Part 1 `inject_own()`:
 
-```python
-        frame = make_frame(NODE_ID, msgid, 0, "T", data)
-```
-
-to:
+* Replace TTL=0 with TTL=DEFAULT_TTL
+* Add seen marking
 
 ```python
         frame = make_frame(NODE_ID, msgid, DEFAULT_TTL, "T", data)
-        self.seen_check_add("{}:{}".format(NODE_ID, msgid))  # don't forward our own bounced packet
+        self.seen_check_add("{}:{}".format(NODE_ID, msgid))
+        self.advertise_burst_start(frame)
+        print("INJECT:", frame)
 ```
 
-### Step 3C: Replace raw forwarding with TTL forwarding
+### 3C) Replace raw forwarding with TTL forwarding
 
-Add this new forward function:
+Add:
 
 ```python
     def forward_ttl(self, orig, msgid, ttl, typ, payload):
@@ -294,17 +316,15 @@ Add this new forward function:
         if ttl2 < 0:
             return
         fwd = make_frame(orig, msgid, ttl2, typ, payload)
-
-        time.sleep_ms(10 + (time.ticks_ms() % 30))
-        self.advertise_frame(fwd)
+        self.advertise_burst_start(fwd)
         print("FWD ttl={}: {}".format(ttl2, fwd))
 ```
 
-### Step 3D: Update `_irq` to dedupe + TTL forward
+### 3D) Update `_irq()` to dedupe + TTL forward
 
 In `_IRQ_SCAN_RESULT`, after parsing:
 
-1. Create dedupe key:
+1. Deduplicate:
 
 ```python
             key = "{}:{}".format(orig, msgid)
@@ -312,7 +332,7 @@ In `_IRQ_SCAN_RESULT`, after parsing:
                 return
 ```
 
-2. Print RX as “new”:
+2. Print as NEW:
 
 ```python
             print("RX NEW (rssi={}): orig={} ttl={} type={} data={}".format(
@@ -327,23 +347,16 @@ In `_IRQ_SCAN_RESULT`, after parsing:
                 self.forward_ttl(orig, msgid, ttl, typ, payload)
 ```
 
-Now the behaviour is mesh-*like* flooding with basic loop control.
+What students learn:
+
+* Dedupe stops infinite repeats
+* TTL bounds propagation range (lower TTL → less reach)
 
 ---
 
-## What you should see in the console
+## Notes for your 300 ms “advertise once per injection” requirement
 
-* `INJECT:` once per minute per node (with jitter)
-* `RX` / `RX NEW:` showing messages from other `orig=...`
-* `FWD` showing that intermediate nodes are relaying data across the classroom
-* When TTL is reduced, long-distance propagation becomes rarer
+* `advertise_burst_start(..., 300ms)` means: transmit for ~300 ms, then stop.
+* It is not “one RF packet”, but it prevents the “same message advertised forever” effect.
 
----
-
-## Notes for a large class size
-
-* Part 2 will get noisy quickly (intentionally).
-* Part 3 is the “usable” version for the full class.
-* Keep `DEFAULT_TTL` low (2–3) for stability.
-
----
+If you want, I can provide a short “expected console output” section for each part (Part 1 / 2 / 3) so students can self-check quickly.
