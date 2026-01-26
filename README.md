@@ -30,6 +30,25 @@ M1|a1b2c3|12345678|3|T|26.73
 
 Create `mesh_node.py` with this template. It does **not** print RX yet and does **not** inject yet until you add Part 1 snippets.
 
+## Code Walkthrough (Functions)
+
+| Function / Method                 | What it does                                                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `read_temp_c()`                   | Reads the Pico W’s internal temperature sensor and returns the temperature value used as the message payload. |
+| `make_frame(...)`                 | Creates a message in the format `M1                                                                           |
+| `parse_frame(s)`                  | Checks and extracts fields from a received message string. Invalid messages are ignored.                      |
+| `adv_payload_name(...)`           | Builds a BLE advertising packet that carries the message inside the device name field.                        |
+| `frame_to_name(frame)`            | Shortens a message so it fits safely inside BLE advertising data.                                             |
+| `Node.__init__()`                 | Sets up BLE, starts scanning, initialises state, and prints the node’s unique ID.                             |
+| `Node._rand_jitter_s()`           | Adds a small random delay so nodes do not all send messages at the same time.                                 |
+| `Node.advertise_burst_start(...)` | Advertises a message for a short time window to simulate sending it once.                                     |
+| `Node.advertise_burst_service()`  | Stops advertising after the burst time has expired.                                                           |
+| `Node.scan()`                     | Listens for BLE advertisements from nearby nodes.                                                             |
+| `Node._irq(...)`                  | Processes BLE events, including receiving messages and (in later parts) forwarding them.                      |
+| `Node.run()`                      | Main loop that controls message injection, advertising, and scanning.                                         |
+
+---
+
 ```python
 # mesh_node.py (STARTER TEMPLATE)
 import bluetooth
