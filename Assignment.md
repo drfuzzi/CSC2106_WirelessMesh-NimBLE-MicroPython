@@ -129,8 +129,3 @@ By completing this task, you should be able to:
 | **Clear Console Output**      | The 5 received messages and the injected `R` message are clearly displayed. |
 
 ---
-
-If you want, I can also:
-
-* generate a **student hint box** that doesn’t reveal the solution, or
-* adapt this into a **group-based or individual submission** variant.
